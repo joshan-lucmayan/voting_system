@@ -246,30 +246,55 @@ export async function transitionElection(
   }
 
   try {
-    const [updated] = await db
-      .update(elections)
-      .set({
-        state: toState,
-        updatedAt: new Date(),
-        resultsPublishedAt: toState === "published" ? new Date() : election.resultsPublishedAt,
-      })
-      .where(eq(elections.id, electionId))
-      .returning();
+    // State change, auto-enrollment and audit are one atomic unit:
+    // the election can never be open with voters missing.
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(elections)
+        .set({
+          state: toState,
+          updatedAt: new Date(),
+          resultsPublishedAt:
+            toState === "published" ? new Date() : election.resultsPublishedAt,
+        })
+        .where(eq(elections.id, electionId))
+        .returning();
 
-    if (!updated) {
-      throw new ElectionTransitionError(404, "Election not found.");
-    }
+      if (!row) {
+        throw new ElectionTransitionError(404, "Election not found.");
+      }
 
-    if (from !== toState) {
-      await db.insert(auditLogs).values({
-        electionId,
-        actorId,
-        action: transitionAction(toState),
-        entityType: "election",
-        entityId: electionId,
-        metadata: { from, to: toState },
-      });
-    }
+      let autoEnrolled = 0;
+      if (from !== toState && toState === "open") {
+        // Atomic set-based enrollment of every active student.
+        // ON CONFLICT DO NOTHING keeps manual enrollments intact and makes
+        // retries idempotent; the unique (election_id, voter_id) index is
+        // the final duplicate guard.
+        const result = await tx.execute(sql`
+          insert into election_voters (election_id, voter_id)
+          select ${electionId}, id from profiles
+          where active = true and role = 'student'
+          on conflict do nothing
+        `);
+        autoEnrolled = result.rowCount ?? 0;
+      }
+
+      if (from !== toState) {
+        await tx.insert(auditLogs).values({
+          electionId,
+          actorId,
+          action: transitionAction(toState),
+          entityType: "election",
+          entityId: electionId,
+          metadata:
+            toState === "open"
+              ? { from, to: toState, autoEnrolled }
+              : { from, to: toState },
+        });
+      }
+
+      return row;
+    });
 
     return updated;
   } catch (error) {

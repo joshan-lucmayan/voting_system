@@ -73,7 +73,16 @@ type StatsData = {
   }[];
 };
 
-type AdminTab = "dashboard" | "candidates" | "stats" | "settings";
+type VoterRow = {
+  voterId: string;
+  schoolId: string;
+  name: string;
+  grade: string;
+  eligible: boolean;
+  votedAt: string | null;
+};
+
+type AdminTab = "dashboard" | "candidates" | "voters" | "stats" | "settings";
 
 export default function AdminDashboard({
   user,
@@ -106,6 +115,19 @@ export default function AdminDashboard({
     startsAt: "",
     endsAt: "",
   });
+
+  // Voter management state
+  const [voters, setVoters] = useState<VoterRow[]>([]);
+  const [votersPagination, setVotersPagination] = useState({
+    page: 1,
+    totalPages: 1,
+    total: 0,
+  });
+  const [votersLoading, setVotersLoading] = useState(false);
+  const [voterSearch, setVoterSearch] = useState("");
+  const [voterStatusFilter, setVoterStatusFilter] = useState("");
+  const [bulkSchoolIds, setBulkSchoolIds] = useState("");
+  const [bulkSummary, setBulkSummary] = useState("");
 
   // Modal states
   const [showAddCandidate, setShowAddCandidate] = useState(false);
@@ -288,6 +310,101 @@ export default function AdminDashboard({
     if (ok) setNotice("Candidate removed.");
   };
 
+  // ── Voter management ─────────────────────────────────────
+  const loadVoters = useCallback(
+    async (page = 1) => {
+      if (!activeElection) return;
+      setVotersLoading(true);
+      try {
+        const params = new URLSearchParams({
+          electionId: activeElection.id,
+          page: String(page),
+        });
+        if (voterSearch.trim()) params.set("q", voterSearch.trim());
+        if (voterStatusFilter) params.set("status", voterStatusFilter);
+        const res = await fetch(`/api/admin/voters?${params.toString()}`);
+        const data = await res.json();
+        if (res.ok) {
+          setVoters(data.voters || []);
+          if (data.pagination) {
+            setVotersPagination({
+              page: data.pagination.page,
+              totalPages: data.pagination.totalPages,
+              total: data.pagination.total,
+            });
+          }
+          setError("");
+        } else {
+          setError(data.error || "Could not load voters.");
+        }
+      } catch {
+        setError("Could not load voters. Please try again.");
+      } finally {
+        setVotersLoading(false);
+      }
+    },
+    [activeElection, voterSearch, voterStatusFilter],
+  );
+
+  useEffect(() => {
+    if (tab === "voters" && activeElection) {
+      void loadVoters(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeElection?.id]);
+
+  const bulkEnrollVoters = async () => {
+    if (!activeElection || !bulkSchoolIds.trim()) return;
+    // One School ID per line; normalize before submission.
+    const schoolIds = [
+      ...new Set(
+        bulkSchoolIds
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+      ),
+    ];
+    try {
+      const res = await fetch("/api/admin/voters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ electionId: activeElection.id, schoolIds }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const s = data.summary ?? {};
+        const parts: string[] = [];
+        if (s.enrolled) parts.push(`${s.enrolled} enrolled`);
+        if (s.already_enrolled) parts.push(`${s.already_enrolled} already enrolled`);
+        if (s.not_found) parts.push(`${s.not_found} not found`);
+        if (s.inactive) parts.push(`${s.inactive} inactive`);
+        if (s.not_student) parts.push(`${s.not_student} not a student`);
+        if (s.invalid) parts.push(`${s.invalid} invalid`);
+        setBulkSummary(parts.join(" · ") || "Nothing to enroll.");
+        setBulkSchoolIds("");
+        await loadVoters(1);
+        fetchAdminData();
+      } else {
+        setError(data.error || "Bulk enrollment failed.");
+      }
+    } catch {
+      setError("A network error occurred during enrollment.");
+    }
+  };
+
+  const markVoterIneligible = async (voterId: string) => {
+    if (!confirm("Mark this voter as ineligible?")) return;
+    await applyAction(
+      () =>
+        fetch(
+          `/api/admin/voters?electionId=${activeElection?.id}&voterId=${voterId}`,
+          { method: "DELETE" },
+        ),
+      "Voter marked ineligible.",
+    );
+    await loadVoters(votersPagination.page);
+  };
+
   if (loading) {
     return (
       <div className="loading-page">
@@ -325,6 +442,12 @@ export default function AdminDashboard({
             {activeElection && (
               <span className="badge">{activeElection.candidateCount}</span>
             )}
+          </button>
+          <button
+            className={`admin-nav-btn ${tab === "voters" ? "active" : ""}`}
+            onClick={() => { setTab("voters"); setSidebarOpen(false); }}
+          >
+            <UserPlus /> Voters
           </button>
           <button
             className={`admin-nav-btn ${tab === "stats" ? "active" : ""}`}
@@ -369,6 +492,7 @@ export default function AdminDashboard({
               {tab === "dashboard" && "Dashboard"}
               {tab === "candidates" && "Candidate Management"}
               {tab === "stats" && "Vote Statistics"}
+              {tab === "voters" && "Voter Eligibility"}
               {tab === "settings" && "Election Settings"}
             </h2>
           </div>
@@ -729,6 +853,215 @@ export default function AdminDashboard({
                     </tbody>
                   </table>
                 </div>
+              )}
+            </>
+          )}
+
+          {/* Voters Tab */}
+          {tab === "voters" && (
+            <>
+              {!activeElection ? (
+                <div style={{ textAlign: "center", padding: 60 }}>
+                  <p style={{ color: "var(--muted)" }}>
+                    Create or select an election first.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="admin-panels">
+                    <div className="admin-panel">
+                      <div className="panel-header">
+                        <div>
+                          <h3>Bulk Enroll Students</h3>
+                          <p>One School ID per line</p>
+                        </div>
+                      </div>
+                      <div style={{ padding: "0 20px 20px" }}>
+                        <textarea
+                          aria-label="School IDs to enroll, one per line"
+                          rows={5}
+                          placeholder={"STU-2026-0001\nSTU-2026-0002"}
+                          value={bulkSchoolIds}
+                          onChange={(e) => setBulkSchoolIds(e.target.value)}
+                          style={{
+                            width: "100%", border: "1.5px solid var(--line)",
+                            borderRadius: "var(--radius-sm)", padding: "10px 14px",
+                            fontSize: 14, fontFamily: "inherit", resize: "vertical",
+                          }}
+                        />
+                        <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12 }}>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={bulkEnrollVoters}
+                            disabled={!bulkSchoolIds.trim()}
+                          >
+                            <UserPlus size={14} /> Enroll
+                          </button>
+                          {bulkSummary && (
+                            <span role="status" style={{ fontSize: 12, color: "var(--muted)" }}>
+                              {bulkSummary}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      background: "white", border: "1px solid var(--line)",
+                      borderRadius: "var(--radius)", overflow: "hidden", marginTop: 20,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex", gap: 12, alignItems: "center",
+                        padding: "16px 20px", borderBottom: "1px solid var(--line)",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <input
+                        type="search"
+                        aria-label="Search voters by school ID or name"
+                        placeholder="Search School ID or name…"
+                        value={voterSearch}
+                        onChange={(e) => setVoterSearch(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void loadVoters(1);
+                        }}
+                        style={{
+                          height: 38, border: "1.5px solid var(--line)",
+                          borderRadius: "var(--radius-sm)", padding: "0 12px",
+                          fontSize: 13, flex: 1, minWidth: 180,
+                        }}
+                      />
+                      <select
+                        aria-label="Filter voters by status"
+                        value={voterStatusFilter}
+                        onChange={(e) => setVoterStatusFilter(e.target.value)}
+                        style={{
+                          height: 38, border: "1.5px solid var(--line)",
+                          borderRadius: "var(--radius-sm)", padding: "0 10px", fontSize: 13,
+                        }}
+                      >
+                        <option value="">All statuses</option>
+                        <option value="eligible">Eligible</option>
+                        <option value="voted">Voted</option>
+                        <option value="ineligible">Ineligible</option>
+                      </select>
+                      <button className="btn btn-outline btn-sm" onClick={() => void loadVoters(1)}>
+                        Apply
+                      </button>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                        {votersPagination.total} voters
+                      </span>
+                    </div>
+
+                    {votersLoading ? (
+                      <div style={{ textAlign: "center", padding: 40 }}>
+                        <span style={{ color: "var(--muted)", fontSize: 13 }}>Loading…</span>
+                      </div>
+                    ) : voters.length === 0 ? (
+                      <div style={{ textAlign: "center", padding: 40 }}>
+                        <p style={{ color: "var(--muted)", fontSize: 13, margin: 0 }}>
+                          No voters found for this filter.
+                        </p>
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className="candidate-table" style={{ width: "100%" }}>
+                          <thead>
+                            <tr>
+                              <th>School ID</th>
+                              <th>Name</th>
+                              <th>Grade</th>
+                              <th>Status</th>
+                              <th style={{ width: 110 }}>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {voters.map((v) => {
+                              const voted = !!v.votedAt;
+                              const statusLabel = voted
+                                ? "Voted"
+                                : v.eligible
+                                  ? "Eligible"
+                                  : "Ineligible";
+                              return (
+                                <tr key={v.voterId}>
+                                  <td><strong>{v.schoolId}</strong></td>
+                                  <td>{v.name}</td>
+                                  <td>{v.grade || "—"}</td>
+                                  <td>
+                                    <span
+                                      style={{
+                                        display: "inline-flex", alignItems: "center", gap: 4,
+                                        background: voted
+                                          ? "var(--success-bg)"
+                                          : v.eligible
+                                            ? "#eef4ff"
+                                            : "#f0f0f0",
+                                        color: voted
+                                          ? "var(--success)"
+                                          : v.eligible
+                                            ? "var(--persian-blue)"
+                                            : "var(--muted)",
+                                        padding: "3px 10px", borderRadius: 10,
+                                        fontSize: 10, fontWeight: 700,
+                                      }}
+                                    >
+                                      {statusLabel}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {!voted && v.eligible && (
+                                      <button
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={() => void markVoterIneligible(v.voterId)}
+                                        title="Mark ineligible"
+                                      >
+                                        <X size={14} /> Ineligible
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display: "flex", justifyContent: "space-between",
+                        alignItems: "center", padding: "12px 20px",
+                        borderTop: "1px solid var(--line)",
+                      }}
+                    >
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        disabled={votersPagination.page <= 1 || votersLoading}
+                        onClick={() => void loadVoters(votersPagination.page - 1)}
+                      >
+                        Previous
+                      </button>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                        Page {votersPagination.page} of {votersPagination.totalPages}
+                      </span>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        disabled={
+                          votersPagination.page >= votersPagination.totalPages ||
+                          votersLoading
+                        }
+                        onClick={() => void loadVoters(votersPagination.page + 1)}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
             </>
           )}
