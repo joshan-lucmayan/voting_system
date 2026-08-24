@@ -88,7 +88,9 @@ async function main() {
     errors.push("School ID must be 4-40 characters (letters, numbers, hyphens).");
   if (!isValidEmail(args.email)) errors.push("Invalid email address.");
   if (!isValidPassword(args.password))
-    errors.push("Password must be between 6 and 128 characters.");
+    errors.push(
+      "Password must be at least 8 characters and contain letters and numbers.",
+    );
   if (!isValidName(args.firstName)) errors.push("Invalid first name.");
   if (!isValidName(args.lastName)) errors.push("Invalid last name.");
   if (errors.length) {

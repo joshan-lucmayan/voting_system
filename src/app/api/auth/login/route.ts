@@ -4,6 +4,22 @@ import { db } from "@/db";
 import { profiles } from "@/db/schema";
 import { createSession } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
+import {
+  getClientIp,
+  loginFailures,
+  loginPerIdentifier,
+  loginPerIp,
+} from "@/lib/rate-limit";
+
+/**
+ * A bcrypt hash of an unrelated random string. Compared against when the
+ * School ID does not exist so that response timing does not reveal whether
+ * an account exists. It is not a secret and matches no real account.
+ */
+const DUMMY_HASH = "$2b$12$Sa.FdNAG/EPOXfgFx4UMPuRxXn/AhTtZcL/VLRhH1Q0cqiErCWGyO";
+
+/** Generic failure message for every authentication failure mode. */
+const GENERIC_FAILURE = { error: "Invalid School ID or password." };
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,7 +38,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find user by school ID
+    const ip = getClientIp(request);
+
+    // Rate limit: per-IP burst first, then per-(IP, identifier) window.
+    const perIp = loginPerIp.check(`login:ip:${ip}`);
+    if (!perIp.allowed) {
+      return Response.json(
+        { error: "Too many attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(perIp.retryAfterSeconds) } },
+      );
+    }
+
+    const perId = loginPerIdentifier.check(`login:id:${ip}:${schoolId}`);
+    if (!perId.allowed) {
+      return Response.json(
+        { error: "Too many attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(perId.retryAfterSeconds) } },
+      );
+    }
+
     const [user] = await db
       .select({
         id: profiles.id,
@@ -40,29 +74,27 @@ export async function POST(request: NextRequest) {
       .where(eq(profiles.schoolId, schoolId))
       .limit(1);
 
-    if (!user) {
-      return Response.json(
-        { error: "Invalid School ID or password." },
-        { status: 401 },
-      );
+    // Always run a bcrypt comparison before responding so unknown School IDs
+    // are indistinguishable from wrong passwords by timing or behavior.
+    let passwordValid = false;
+    if (user) {
+      passwordValid = await verifyPassword(password, user.passwordHash);
+    } else {
+      await verifyPassword(password, DUMMY_HASH);
     }
 
-    if (!user.active) {
-      return Response.json(
-        { error: "This account has been deactivated." },
-        { status: 403 },
-      );
+    if (!user || !passwordValid || !user.active) {
+      // Progressive delay after repeated failures for this identifier.
+      loginFailures.record(`${ip}:${schoolId}`);
+      const delayMs = loginFailures.delayMs(`${ip}:${schoolId}`);
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      return Response.json(GENERIC_FAILURE, { status: 401 });
     }
 
-    const valid = await verifyPassword(password, user.passwordHash);
-    if (!valid) {
-      return Response.json(
-        { error: "Invalid School ID or password." },
-        { status: 401 },
-      );
-    }
+    loginFailures.reset(`${ip}:${schoolId}`);
 
-    // Create session
     await createSession(user.id, user.role as "student" | "admin");
 
     return Response.json({

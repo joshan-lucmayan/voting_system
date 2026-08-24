@@ -11,9 +11,21 @@ import {
   isValidName,
   sanitize,
 } from "@/lib/validators";
+import { getClientIp, signupPerIp } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getClientIp(request);
+
+    // Rate limit: 5 signup attempts / hour / IP.
+    const limit = signupPerIp.check(`signup:ip:${ip}`);
+    if (!limit.allowed) {
+      return Response.json(
+        { error: "Too many signup attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } },
+      );
+    }
+
     const body = (await request.json()) as {
       firstName?: string;
       lastName?: string;
@@ -61,7 +73,7 @@ export async function POST(request: NextRequest) {
       return Response.json(
         {
           error:
-            "Password must be between 6 and 128 characters.",
+            "Password must be at least 8 characters and contain letters and numbers.",
         },
         { status: 400 },
       );
@@ -119,6 +131,19 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      // Concurrent duplicate registration lost the race with a unique
+      // constraint. Same safe message the pre-check produces.
+      return Response.json(
+        { error: "An account with this School ID or email already exists." },
+        { status: 409 },
+      );
+    }
     console.error("Signup error:", error);
     if (error instanceof Response) return error;
     return Response.json(

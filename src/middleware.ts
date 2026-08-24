@@ -1,48 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const STUDENT_ONLY = ["/vote"];
-const ADMIN_ONLY = ["/admin/dashboard", "/admin/elections", "/admin/candidates", "/admin/stats"];
-const AUTH_ROUTES = ["/login", "/signup", "/admin"];
-
+/**
+ * Cookie-presence routing guard only.
+ * Role authorization happens server-side in page components
+ * (src/app/vote/page.tsx, src/app/admin/page.tsx) and in every API
+ * route via requireAuth(). Middleware never performs database lookups.
+ */
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const sessionCookie = request.cookies.get("scv_session")?.value;
-  const hasSession = !!sessionCookie;
+  const hasSession = !!request.cookies.get("scv_session")?.value;
 
-  // Redirect logged-in users away from auth pages
-  if (AUTH_ROUTES.includes(pathname) && hasSession) {
-    // If they're on /login or /signup, redirect to /vote
-    if (pathname === "/login" || pathname === "/signup") {
-      return NextResponse.redirect(new URL("/vote", request.url));
-    }
-    // If they're on /admin (login page), let them through
-    if (pathname === "/admin") {
-      return NextResponse.next();
-    }
+  // Logged-in users do not need the auth pages.
+  if ((pathname === "/login" || pathname === "/signup") && hasSession) {
+    return NextResponse.redirect(new URL("/vote", request.url));
   }
 
-  // Protect student routes
-  if (STUDENT_ONLY.some((p) => pathname.startsWith(p)) && !hasSession) {
+  if (pathname.startsWith("/vote") && !hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Protect admin routes (but not /admin itself which is the login)
-  if (ADMIN_ONLY.some((p) => pathname.startsWith(p)) && !hasSession) {
-    return NextResponse.redirect(new URL("/admin", request.url));
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    if (!hasSession) {
+      return NextResponse.redirect(new URL("/login", request.url));
+    }
+    return NextResponse.next();
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: [
-    "/vote/:path*",
-    "/login",
-    "/signup",
-    "/admin",
-    "/admin/dashboard",
-    "/admin/elections",
-    "/admin/candidates",
-    "/admin/stats",
-  ],
+  matcher: ["/vote/:path*", "/login", "/signup", "/admin", "/admin/:path*"],
 };

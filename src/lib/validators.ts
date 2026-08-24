@@ -15,9 +15,14 @@ export function isSchoolEmail(email: string): boolean {
   return isValidEmail(email);
 }
 
-/** Validate password strength. */
+/** Validate password strength: 8-128 chars, at least one letter and one number. */
 export function isValidPassword(password: string): boolean {
-  return password.length >= 6 && password.length <= 128;
+  return (
+    password.length >= 8 &&
+    password.length <= 128 &&
+    /[A-Za-z]/.test(password) &&
+    /\d/.test(password)
+  );
 }
 
 /** Sanitize a string input — trim and limit length. */

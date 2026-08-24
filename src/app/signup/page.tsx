@@ -141,7 +141,7 @@ export default function SignupPage() {
                 id="password"
                 name="password"
                 type={showPassword ? "text" : "password"}
-                placeholder="At least 6 characters"
+                placeholder="At least 8 characters with letters and numbers"
                 value={form.password}
                 onChange={handleChange}
                 required
