@@ -1,0 +1,35 @@
+{
+  "name": "school-council-voting",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "drizzle-orm": "^0.39.3",
+    "pg": "^8.14.1",
+    "bcryptjs": "^3.0.2",
+    "lucide-react": "^0.487.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@types/pg": "^8.11.11",
+    "@types/bcryptjs": "^3.0.0",
+    "typescript": "^5.8.3",
+    "drizzle-kit": "^0.31.1",
+    "@tailwindcss/postcss": "^4.1.4",
+    "tailwindcss": "^4.1.4"
+  }
+}
