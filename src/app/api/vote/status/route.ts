@@ -3,13 +3,11 @@ import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
 import { electionVoters, elections } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    await ensureDemoElection();
     const user = await requireAuth("student");
     const { searchParams } = new URL(request.url);
     const electionId = searchParams.get("electionId");

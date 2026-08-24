@@ -9,7 +9,6 @@ import {
   elections,
 } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +17,6 @@ export async function GET(
   { params }: { params: Promise<{ electionId: string }> },
 ) {
   try {
-    await ensureDemoElection();
     const user = await requireAuth();
     const { electionId } = await params;
 

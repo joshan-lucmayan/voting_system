@@ -11,11 +11,9 @@ import {
   isValidName,
   sanitize,
 } from "@/lib/validators";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export async function POST(request: NextRequest) {
   try {
-    await ensureDemoElection();
     const body = (await request.json()) as {
       firstName?: string;
       lastName?: string;

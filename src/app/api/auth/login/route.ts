@@ -4,11 +4,9 @@ import { db } from "@/db";
 import { profiles } from "@/db/schema";
 import { createSession } from "@/lib/auth";
 import { verifyPassword } from "@/lib/password";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export async function POST(request: NextRequest) {
   try {
-    await ensureDemoElection();
     const body = (await request.json()) as {
       schoolId?: string;
       password?: string;

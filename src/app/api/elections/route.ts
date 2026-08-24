@@ -1,13 +1,11 @@
 import { db } from "@/db";
 import { elections } from "@/db/schema";
 import { eq, or, and, gte, lte } from "drizzle-orm";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    await ensureDemoElection();
     const now = new Date();
     const all = await db
       .select({

@@ -1,3 +1,7 @@
+/**
+ * Demo dataset for development. Invoked only by src/db/seed.ts.
+ * Fixed UUIDs + ON CONFLICT DO NOTHING make this idempotent.
+ */
 import { db } from "@/db";
 import {
   candidates,
@@ -9,14 +13,7 @@ import {
 import { IDS } from "@/lib/election-ids";
 import { hashPassword } from "@/lib/password";
 
-export { IDS };
-
-let seeded = false;
-
-export async function ensureDemoElection() {
-  if (seeded) return;
-  seeded = true;
-
+export async function seedDemoData() {
   const studentHash = await hashPassword("student123");
   const adminHash = await hashPassword("admin123");
 

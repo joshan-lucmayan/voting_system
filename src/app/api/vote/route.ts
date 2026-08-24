@@ -11,12 +11,10 @@ import {
   electionVoters,
 } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
-import { ensureDemoElection, IDS } from "@/lib/election-data";
+import { IDS } from "@/lib/election-ids";
 
 export async function POST(request: Request) {
   try {
-    await ensureDemoElection();
-
     // Require authenticated student
     const user = await requireAuth("student");
 

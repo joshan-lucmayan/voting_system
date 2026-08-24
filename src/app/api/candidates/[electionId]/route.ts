@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { candidates, electionPositions } from "@/db/schema";
-import { ensureDemoElection } from "@/lib/election-data";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +10,6 @@ export async function GET(
   { params }: { params: Promise<{ electionId: string }> },
 ) {
   try {
-    await ensureDemoElection();
     const { electionId } = await params;
 
     const positions = await db

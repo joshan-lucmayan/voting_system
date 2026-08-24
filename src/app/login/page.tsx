@@ -130,23 +130,25 @@ export default function LoginPage() {
           Don&apos;t have an account? <Link href="/signup">Sign up</Link>
         </div>
 
-        <div
-          style={{
-            marginTop: 20,
-            padding: "14px 16px",
-            background: "var(--bg)",
-            borderRadius: "var(--radius-sm)",
-            fontSize: 12,
-            color: "var(--muted)",
-            textAlign: "center",
-          }}
-        >
-          <strong style={{ color: "var(--deep-navy)", display: "block", marginBottom: 4 }}>
-            Demo Credentials
-          </strong>
-          Student: STU-2026-1842 / student123<br />
-          Admin: ADM-001 / admin123
-        </div>
+        {process.env.NEXT_PUBLIC_DEMO_MODE === "true" && (
+          <div
+            style={{
+              marginTop: 20,
+              padding: "14px 16px",
+              background: "var(--bg)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 12,
+              color: "var(--muted)",
+              textAlign: "center",
+            }}
+          >
+            <strong style={{ color: "var(--deep-navy)", display: "block", marginBottom: 4 }}>
+              Demo Credentials
+            </strong>
+            Student: STU-2026-1842 / student123<br />
+            Admin: ADM-001 / admin123
+          </div>
+        )}
       </div>
     </div>
   );
