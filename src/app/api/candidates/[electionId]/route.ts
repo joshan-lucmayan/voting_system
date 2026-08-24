@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { candidates, electionPositions } from "@/db/schema";
 
@@ -22,11 +22,12 @@ export async function GET(
       return Response.json({ positions: [], candidates: [] });
     }
 
+    // Only approved, non-archived candidates may appear on a ballot.
     const candidateList = await db
       .select()
       .from(candidates)
       .where(
-        eq(candidates.approved, true),
+        and(eq(candidates.approved, true), eq(candidates.archived, false)),
       );
 
     // Filter candidates that belong to this election's positions

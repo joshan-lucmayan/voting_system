@@ -95,6 +95,17 @@ export default function AdminDashboard({
   const [stats, setStats] = useState<StatsData | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [availablePositions, setAvailablePositions] = useState<
+    { id: string; name: string }[]
+  >([]);
+  const [newElection, setNewElection] = useState({
+    title: "",
+    schoolYear: "",
+    description: "",
+    startsAt: "",
+    endsAt: "",
+  });
 
   // Modal states
   const [showAddCandidate, setShowAddCandidate] = useState(false);
@@ -150,48 +161,114 @@ export default function AdminDashboard({
     router.push("/");
   };
 
-  const toggleLiveResults = async (showLive: boolean) => {
-    if (!activeElection) return;
+  /** Shared mutation helper: applies server feedback or shows the error. */
+  const applyAction = async (
+    action: () => Promise<Response>,
+    successMessage?: string,
+  ): Promise<boolean> => {
     try {
-      await fetch("/api/admin/elections", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          electionId: activeElection.id,
-          showLiveResults: showLive,
-        }),
-      });
-      fetchAdminData();
+      const res = await action();
+      if (res.ok) {
+        setNotice(successMessage ?? "");
+        setError("");
+        await fetchAdminData();
+        return true;
+      }
+      const data = await res.json().catch(() => null);
+      setError(data?.error || `Request failed (${res.status}).`);
+      return false;
     } catch {
-      // handle silently
+      setError("A network error occurred. Please try again.");
+      return false;
     }
   };
 
-  const toggleElectionState = async (newState: string) => {
+  const toggleLiveResults = (showLive: boolean) => {
+    if (!activeElection) return;
+    void applyAction(
+      () =>
+        fetch("/api/admin/elections", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            electionId: activeElection.id,
+            showLiveResults: showLive,
+          }),
+        }),
+      `Live results ${showLive ? "enabled" : "disabled"}.`,
+    );
+  };
+
+  const toggleElectionState = (newState: string) => {
+    if (!activeElection) return;
+    void applyAction(
+      () =>
+        fetch("/api/admin/elections", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            electionId: activeElection.id,
+            state: newState,
+          }),
+        }),
+      `Election is now "${newState}".`,
+    );
+  };
+
+  const createElection = async () => {
+    if (!newElection.title || !newElection.startsAt || !newElection.endsAt) return;
+    const ok = await applyAction(
+      () =>
+        fetch("/api/admin/elections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // datetime-local values are converted to ISO-8601 UTC here.
+          body: JSON.stringify({
+            ...newElection,
+            startsAt: new Date(newElection.startsAt).toISOString(),
+            endsAt: new Date(newElection.endsAt).toISOString(),
+          }),
+        }),
+      "Election created as draft.",
+    );
+    if (ok) {
+      setShowCreateElection(false);
+      setNewElection({
+        title: "",
+        schoolYear: "",
+        description: "",
+        startsAt: "",
+        endsAt: "",
+      });
+    }
+  };
+
+  /** Positions come from the positions API — never derived from candidates. */
+  const loadPositions = async () => {
     if (!activeElection) return;
     try {
-      await fetch("/api/admin/elections", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          electionId: activeElection.id,
-          state: newState,
-        }),
-      });
-      fetchAdminData();
+      const res = await fetch(
+        `/api/admin/positions?electionId=${activeElection.id}`,
+      );
+      const data = await res.json();
+      setAvailablePositions(data.positions || []);
     } catch {
-      // handle silently
+      setError("Could not load positions. Please try again.");
     }
   };
 
   const addCandidate = async () => {
     if (!newCandidate.name || !newCandidate.positionId) return;
-    try {
-      await fetch("/api/admin/candidates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newCandidate),
-      });
+    const ok = await applyAction(
+      () =>
+        fetch("/api/admin/candidates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newCandidate),
+        }),
+      "Candidate added.",
+    );
+    if (ok) {
       setShowAddCandidate(false);
       setNewCandidate({
         name: "",
@@ -200,20 +277,15 @@ export default function AdminDashboard({
         platform: "",
         positionId: "",
       });
-      fetchAdminData();
-    } catch {
-      // handle silently
     }
   };
 
   const deleteCandidate = async (id: string) => {
-    if (!confirm("Are you sure you want to remove this candidate?")) return;
-    try {
-      await fetch(`/api/admin/candidates/${id}`, { method: "DELETE" });
-      fetchAdminData();
-    } catch {
-      // handle silently
-    }
+    if (!confirm("Remove this candidate? Candidates with votes will be archived.")) return;
+    const ok = await applyAction(() =>
+      fetch(`/api/admin/candidates/${id}`, { method: "DELETE" }),
+    );
+    if (ok) setNotice("Candidate removed.");
   };
 
   if (loading) {
@@ -301,6 +373,33 @@ export default function AdminDashboard({
             </h2>
           </div>
           <div className="admin-topbar-actions">
+            {elections.length > 0 && (
+              <select
+                value={activeElection?.id ?? ""}
+                onChange={(e) => {
+                  setActiveElectionId(e.target.value);
+                  setError("");
+                  setNotice("");
+                }}
+                aria-label="Active election"
+                style={{
+                  height: 36, border: "1.5px solid var(--line)", borderRadius: "var(--radius-sm)",
+                  padding: "0 10px", fontSize: 13, background: "#fff", maxWidth: 260,
+                }}
+              >
+                {elections.map((e2) => (
+                  <option key={e2.id} value={e2.id}>
+                    {e2.title} ({e2.state})
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowCreateElection(true)}
+            >
+              <Plus size={16} /> New Election
+            </button>
             <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
               <LogOut size={16} /> Log out
             </button>
@@ -309,8 +408,16 @@ export default function AdminDashboard({
 
         <main className="admin-main">
           {error && (
-            <div className="form-error" style={{ marginBottom: 20 }} role="alert">
-              {error}
+            <div className="form-error" role="alert">{error}</div>
+          )}
+          {notice && !error && (
+            <div
+              className="status-banner voted"
+              role="status"
+              style={{ marginBottom: 16 }}
+            >
+              <CheckCircle />
+              <span>{notice}</span>
             </div>
           )}
           {/* Dashboard Tab */}
@@ -426,7 +533,7 @@ export default function AdminDashboard({
                     </div>
                     <button
                       className="btn btn-primary btn-sm"
-                      onClick={() => setShowAddCandidate(true)}
+                      onClick={() => { setShowAddCandidate(true); loadPositions(); }}
                     >
                       <Plus /> Add Candidate
                     </button>
@@ -542,7 +649,7 @@ export default function AdminDashboard({
                     {candidates.length} candidates across {activeElection?.positionCount ?? 0} positions
                   </p>
                 </div>
-                <button className="btn btn-primary" onClick={() => setShowAddCandidate(true)}>
+                <button className="btn btn-primary" onClick={() => { setShowAddCandidate(true); loadPositions(); }}>
                   <UserPlus /> Add Candidate
                 </button>
               </div>
@@ -559,7 +666,7 @@ export default function AdminDashboard({
                   <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 20px" }}>
                     Add candidates to start building your election ballot.
                   </p>
-                  <button className="btn btn-primary" onClick={() => setShowAddCandidate(true)}>
+                  <button className="btn btn-primary" onClick={() => { setShowAddCandidate(true); loadPositions(); }}>
                     <Plus /> Add First Candidate
                   </button>
                 </div>
@@ -873,14 +980,11 @@ export default function AdminDashboard({
                     }}
                   >
                     <option value="">Select position...</option>
-                    {candidates.length > 0 &&
-                      [...new Set(candidates.map((c) => c.positionId))].map(
-                        (pid) => (
-                          <option key={pid} value={pid}>
-                            {candidates.find((c) => c.positionId === pid)?.positionName}
-                          </option>
-                        ),
-                      )}
+                    {availablePositions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -925,6 +1029,109 @@ export default function AdminDashboard({
                 disabled={!newCandidate.name || !newCandidate.positionId}
               >
                 <Plus /> Add Candidate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Election Modal */}
+      {showCreateElection && (
+        <div className="modal-scrim" onClick={() => setShowCreateElection(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Create Election</h2>
+
+            <div className="auth-form">
+              <div className="form-group">
+                <label htmlFor="election-title">Title</label>
+                <input
+                  id="election-title"
+                  type="text"
+                  placeholder="e.g. Student Council Election 2026-2027"
+                  value={newElection.title}
+                  onChange={(e) => setNewElection({ ...newElection, title: e.target.value })}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="election-year">School Year</label>
+                  <input
+                    id="election-year"
+                    type="text"
+                    placeholder="e.g. 2026-2027"
+                    value={newElection.schoolYear}
+                    onChange={(e) =>
+                      setNewElection({ ...newElection, schoolYear: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="election-start">Starts</label>
+                  <input
+                    id="election-start"
+                    type="datetime-local"
+                    value={newElection.startsAt}
+                    onChange={(e) =>
+                      setNewElection({ ...newElection, startsAt: e.target.value })
+                    }
+                    style={{
+                      height: 44, border: "1.5px solid var(--line)",
+                      borderRadius: "var(--radius-sm)", padding: "0 14px", fontSize: 14,
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="election-end">Ends</label>
+                  <input
+                    id="election-end"
+                    type="datetime-local"
+                    value={newElection.endsAt}
+                    onChange={(e) => setNewElection({ ...newElection, endsAt: e.target.value })}
+                    style={{
+                      height: 44, border: "1.5px solid var(--line)",
+                      borderRadius: "var(--radius-sm)", padding: "0 14px", fontSize: 14,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="election-desc">Description (optional)</label>
+                <textarea
+                  id="election-desc"
+                  rows={2}
+                  placeholder="What is this election for?"
+                  value={newElection.description}
+                  onChange={(e) =>
+                    setNewElection({ ...newElection, description: e.target.value })
+                  }
+                  style={{
+                    border: "1.5px solid var(--line)", borderRadius: "var(--radius-sm)",
+                    padding: "10px 14px", fontSize: 14, fontFamily: "inherit",
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setShowCreateElection(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={createElection}
+                disabled={
+                  !newElection.title ||
+                  !newElection.schoolYear ||
+                  !newElection.startsAt ||
+                  !newElection.endsAt
+                }
+              >
+                <Calendar size={16} /> Create Draft
               </button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  auditLogs,
   candidates,
   electionPositions,
   elections,
@@ -179,4 +180,111 @@ export async function validateElectionCanOpen(
   }
 
   return null;
+}
+
+/**
+ * Controlled error thrown by the authoritative transition function.
+ * `status` maps directly to the HTTP response code.
+ */
+export class ElectionTransitionError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ElectionTransitionError";
+  }
+}
+
+function transitionAction(to: ElectionState): "update" | "open" | "close" | "publish" {
+  switch (to) {
+    case "open":
+      return "open";
+    case "closed":
+      return "close";
+    case "published":
+      return "publish";
+    default:
+      return "update";
+  }
+}
+
+/**
+ * THE single authoritative election state-change path.
+ * Every API state mutation must go through this function:
+ * - enforces the lifecycle matrix (canTransition)
+ * - runs open preconditions via validateElectionCanOpen()
+ * - maps the DB single-open constraint to a controlled 409
+ * - writes an audit entry for every successful transition
+ */
+export async function transitionElection(
+  actorId: string,
+  electionId: string,
+  toState: ElectionState,
+): Promise<Election> {
+  const election = await getElection(electionId);
+  if (!election) {
+    throw new ElectionTransitionError(404, "Election not found.");
+  }
+
+  const from = election.state;
+  if (from !== toState && !canTransition(from, toState)) {
+    throw new ElectionTransitionError(
+      409,
+      `Cannot change an election from "${from}" to "${toState}".`,
+    );
+  }
+
+  if (toState === "open") {
+    const issue = await validateElectionCanOpen(electionId);
+    if (issue) {
+      throw new ElectionTransitionError(
+        issue.code === "NOT_FOUND" ? 404 : issue.code === "ANOTHER_ELECTION_OPEN" ? 409 : 400,
+        issue.message,
+      );
+    }
+  }
+
+  try {
+    const [updated] = await db
+      .update(elections)
+      .set({
+        state: toState,
+        updatedAt: new Date(),
+        resultsPublishedAt: toState === "published" ? new Date() : election.resultsPublishedAt,
+      })
+      .where(eq(elections.id, electionId))
+      .returning();
+
+    if (!updated) {
+      throw new ElectionTransitionError(404, "Election not found.");
+    }
+
+    if (from !== toState) {
+      await db.insert(auditLogs).values({
+        electionId,
+        actorId,
+        action: transitionAction(toState),
+        entityType: "election",
+        entityId: electionId,
+        metadata: { from, to: toState },
+      });
+    }
+
+    return updated;
+  } catch (error) {
+    // Final defense: the partial unique index one_open_election_idx.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      throw new ElectionTransitionError(
+        409,
+        "Another election is already open. Close it first.",
+      );
+    }
+    throw error;
+  }
 }

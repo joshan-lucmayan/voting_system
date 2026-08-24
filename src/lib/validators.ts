@@ -39,3 +39,10 @@ export function isValidName(name: string): boolean {
 export function isValidGrade(grade: string): boolean {
   return grade.length <= 30;
 }
+
+/** v1 approved candidate image policy: static whitelisted SVG assets only. */
+export const CANDIDATE_IMAGE_PATTERN = /^\/candidates\/[a-z0-9-]+\.svg$/;
+
+export function isValidCandidateImageUrl(url: string): boolean {
+  return CANDIDATE_IMAGE_PATTERN.test(url);
+}
