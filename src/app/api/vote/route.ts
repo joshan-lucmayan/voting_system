@@ -11,21 +11,69 @@ import {
   electionVoters,
 } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
-import { IDS } from "@/lib/election-ids";
+
+/** Strict runtime shape check for the parsed request body. */
+function parseBallotPayload(raw: unknown): {
+  electionId: string;
+  selections: Record<string, string[]>;
+} | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return null;
+  }
+  const body = raw as Record<string, unknown>;
+
+  // Extra fields are ignored (no mass assignment); these two are read.
+  const electionId = body.electionId;
+  if (typeof electionId !== "string" || electionId.length === 0) {
+    return null;
+  }
+
+  const selections = body.selections;
+  if (typeof selections !== "object" || selections === null || Array.isArray(selections)) {
+    return null;
+  }
+
+  const normalized: Record<string, string[]> = {};
+  for (const [positionId, choices] of Object.entries(selections)) {
+    // JSON objects cannot contain duplicate keys (last one wins), so every
+    // entry here is a distinct position by construction.
+    if (!Array.isArray(choices)) return null;
+    for (const candidateId of choices) {
+      if (typeof candidateId !== "string") return null;
+    }
+    normalized[positionId] = choices;
+  }
+
+  return { electionId, selections: normalized };
+}
 
 export async function POST(request: Request) {
   try {
     // Require authenticated student
     const user = await requireAuth("student");
 
-    const payload = (await request.json()) as {
-      selections?: Record<string, string[]>;
-      electionId?: string;
-    };
+    let parsed: ReturnType<typeof parseBallotPayload>;
+    try {
+      const raw: unknown = await request.json();
+      parsed = parseBallotPayload(raw);
+    } catch {
+      return Response.json(
+        { error: "Your ballot could not be read." },
+        { status: 400 },
+      );
+    }
+    if (!parsed) {
+      return Response.json(
+        { error: "Your ballot is malformed." },
+        { status: 400 },
+      );
+    }
 
-    const electionId = payload.electionId ?? IDS.election;
-    const submitted = payload.selections ?? {};
-    const candidateIds = Object.values(submitted).flat();
+    // The election is resolved server-side from authenticated context —
+    // there is no default election and no client-controlled fallback.
+    const { electionId, selections } = parsed;
+
+    const candidateIds = Object.values(selections).flat();
 
     if (!candidateIds.length || candidateIds.length > 20) {
       return Response.json(
@@ -70,6 +118,18 @@ export async function POST(request: Request) {
         .from(electionPositions)
         .where(eq(electionPositions.electionId, electionId));
 
+      // COMPLETENESS: submitted position keys must exactly equal ALL
+      // positions of the election. Missing or unknown positions are both
+      // rejected — no abstentions in v1.
+      if (positions.length !== Object.keys(selections).length) {
+        throw new Error("INCOMPLETE_BALLOT");
+      }
+      for (const position of positions) {
+        if (!(position.id in selections)) {
+          throw new Error("INCOMPLETE_BALLOT");
+        }
+      }
+
       const validCandidates = await tx
         .select({
           id: candidates.id,
@@ -83,7 +143,7 @@ export async function POST(request: Request) {
         throw new Error("INVALID_CANDIDATE");
 
       // Validate selections per position
-      for (const [positionId, choices] of Object.entries(submitted)) {
+      for (const [positionId, choices] of Object.entries(selections)) {
         const position = positions.find((item) => item.id === positionId);
         if (
           !position ||
@@ -107,8 +167,11 @@ export async function POST(request: Request) {
         }
       }
 
-      // Create anonymous ballot
-      const receiptCode = `NF-${randomBytes(4).toString("hex").toUpperCase()}`;
+      // Create anonymous ballot.
+      // 6 random bytes = 48 bits of entropy: collision probability stays
+      // negligible across realistic election sizes (the receipts table has
+      // a unique constraint as the final guard).
+      const receiptCode = `NF-${randomBytes(6).toString("hex").toUpperCase()}`;
       const ballotId = randomUUID();
 
       await tx.insert(ballots).values({
@@ -118,7 +181,7 @@ export async function POST(request: Request) {
       });
 
       await tx.insert(ballotSelections).values(
-        Object.entries(submitted).flatMap(([positionId, choices]) =>
+        Object.entries(selections).flatMap(([positionId, choices]) =>
           choices.map((candidateId) => ({
             ballotId,
             positionId,
@@ -159,21 +222,31 @@ export async function POST(request: Request) {
     if (error instanceof Response) return error;
 
     const message = error instanceof Error ? error.message : "UNKNOWN";
-    const known: Record<string, string> = {
-      NOT_ELIGIBLE: "You are not eligible for this election.",
-      ALREADY_VOTED:
-        "You have already voted in this election.",
-      ELECTION_NOT_OPEN:
-        "This election is not currently open for voting.",
-      INVALID_CANDIDATE: "The ballot contains an invalid candidate.",
-      INVALID_SELECTION_COUNT:
-        "A position has an invalid number of selections.",
-      CANDIDATE_POSITION_MISMATCH:
-        "A candidate does not belong to the selected position.",
+    const known: Record<string, { message: string; status: number }> = {
+      NOT_ELIGIBLE: { message: "You are not eligible for this election.", status: 409 },
+      ALREADY_VOTED: { message: "You have already voted in this election.", status: 409 },
+      ELECTION_NOT_OPEN: {
+        message: "This election is not currently open for voting.",
+        status: 409,
+      },
+      INCOMPLETE_BALLOT: {
+        message: "Your ballot must include exactly one selection for every position.",
+        status: 400,
+      },
+      INVALID_CANDIDATE: { message: "The ballot contains an invalid candidate.", status: 400 },
+      INVALID_SELECTION_COUNT: {
+        message: "A position has an invalid number of selections.",
+        status: 400,
+      },
+      CANDIDATE_POSITION_MISMATCH: {
+        message: "A candidate does not belong to the selected position.",
+        status: 400,
+      },
     };
+    const matched = known[message];
     return Response.json(
-      { error: known[message] ?? "We could not securely submit your ballot." },
-      { status: known[message] ? 409 : 500 },
+      { error: matched?.message ?? "We could not securely submit your ballot." },
+      { status: matched?.status ?? (message === "UNKNOWN" ? 500 : 400) },
     );
   }
 }
