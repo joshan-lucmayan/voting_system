@@ -1,0 +1,1 @@
+ALTER TABLE "candidates" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;

@@ -11,6 +11,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────
 export const userRole = pgEnum("user_role", ["student", "admin"]);
@@ -119,8 +120,17 @@ export const elections = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
-  (t) => [index("elections_state_idx").on(t.state)],
+  (t) => [
+    index("elections_state_idx").on(t.state),
+    // Structurally guarantees at most ONE election can be open at a time.
+    uniqueIndex("one_open_election_idx")
+      .on(sql`(true)`)
+      .where(sql`state = 'open'`),
+  ],
 );
 
 // ── Election Positions ─────────────────────────────────
@@ -158,6 +168,7 @@ export const candidates = pgTable(
     platform: text("platform").notNull(),
     imageUrl: text("image_url").notNull().default("/candidates/placeholder.svg"),
     approved: boolean("approved").notNull().default(false),
+    archived: boolean("archived").notNull().default(false),
     displayOrder: integer("display_order").notNull().default(0),
   },
   (t) => [index("candidates_position_idx").on(t.positionId)],

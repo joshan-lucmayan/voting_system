@@ -1,0 +1,2 @@
+ALTER TABLE "elections" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "one_open_election_idx" ON "elections" USING btree ((true)) WHERE state = 'open';
