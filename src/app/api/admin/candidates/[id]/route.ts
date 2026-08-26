@@ -12,8 +12,7 @@ import { requireAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** v1 approved image policy: static whitelisted SVG assets only. */
-const IMAGE_URL_PATTERN = /^\/candidates\/[a-z0-9-]+\.svg$/;
+import { isValidCandidateImageUrl } from "@/lib/validators";
 
 async function loadCandidateWithElection(id: string) {
   const [row] = await db
@@ -123,7 +122,7 @@ export async function PATCH(
     if (body.imageUrl !== undefined) {
       const imageUrl =
         typeof body.imageUrl === "string" ? body.imageUrl.trim() : "";
-      if (!IMAGE_URL_PATTERN.test(imageUrl)) {
+      if (!isValidCandidateImageUrl(imageUrl)) {
         return Response.json(
           { error: "Image must be a school candidate asset like /candidates/name.svg." },
           { status: 400 },

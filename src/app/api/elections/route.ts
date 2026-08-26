@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { elections } from "@/db/schema";
-import { eq, or, and, gte, lte } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 

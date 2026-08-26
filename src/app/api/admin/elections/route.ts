@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql, and, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   auditLogs,
@@ -44,16 +44,30 @@ export async function GET() {
     await requireAuth("admin");
 
     const allElections = await db.select().from(elections);
+    const electionIds = allElections.map((e) => e.id);
 
-    const enriched = await Promise.all(
-      allElections.map(async (election) => {
-        const [positionCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
+    if (electionIds.length === 0) {
+      return Response.json({ elections: [] });
+    }
+
+    // Batch aggregate queries for all elections at once
+    const [positionCounts, candidateCounts, voterCounts, ballotCounts] =
+      await Promise.all([
+        // Position counts per election
+        db
+          .select({
+            electionId: electionPositions.electionId,
+            count: sql<number>`count(*)::int`,
+          })
           .from(electionPositions)
-          .where(eq(electionPositions.electionId, election.id));
-
-        const [candidateCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
+          .where(inArray(electionPositions.electionId, electionIds))
+          .groupBy(electionPositions.electionId),
+        // Approved candidate counts per election
+        db
+          .select({
+            electionId: electionPositions.electionId,
+            count: sql<number>`count(*)::int`,
+          })
           .from(candidates)
           .innerJoin(
             electionPositions,
@@ -61,36 +75,50 @@ export async function GET() {
           )
           .where(
             and(
-              eq(electionPositions.electionId, election.id),
+              inArray(electionPositions.electionId, electionIds),
               eq(candidates.approved, true),
               eq(candidates.archived, false),
             ),
-          );
-
-        const [voterCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
+          )
+          .groupBy(electionPositions.electionId),
+        // Eligible voter counts per election
+        db
+          .select({
+            electionId: electionVoters.electionId,
+            count: sql<number>`count(*)::int`,
+          })
           .from(electionVoters)
           .where(
             and(
-              eq(electionVoters.electionId, election.id),
+              inArray(electionVoters.electionId, electionIds),
               eq(electionVoters.eligible, true),
             ),
-          );
-
-        const [ballotCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
+          )
+          .groupBy(electionVoters.electionId),
+        // Ballot counts per election
+        db
+          .select({
+            electionId: ballots.electionId,
+            count: sql<number>`count(*)::int`,
+          })
           .from(ballots)
-          .where(eq(ballots.electionId, election.id));
+          .where(inArray(ballots.electionId, electionIds))
+          .groupBy(ballots.electionId),
+      ]);
 
-        return {
-          ...election,
-          positionCount: positionCount?.count ?? 0,
-          candidateCount: candidateCount?.count ?? 0,
-          eligibleVoters: voterCount?.count ?? 0,
-          votesCast: ballotCount?.count ?? 0,
-        };
-      }),
-    );
+    // Build lookup maps for O(1) access
+    const posMap = new Map(positionCounts.map((r) => [r.electionId, r.count]));
+    const candMap = new Map(candidateCounts.map((r) => [r.electionId, r.count]));
+    const voterMap = new Map(voterCounts.map((r) => [r.electionId, r.count]));
+    const ballotMap = new Map(ballotCounts.map((r) => [r.electionId, r.count]));
+
+    const enriched = allElections.map((election) => ({
+      ...election,
+      positionCount: posMap.get(election.id) ?? 0,
+      candidateCount: candMap.get(election.id) ?? 0,
+      eligibleVoters: voterMap.get(election.id) ?? 0,
+      votesCast: ballotMap.get(election.id) ?? 0,
+    }));
 
     return Response.json({ elections: enriched });
   } catch (error) {

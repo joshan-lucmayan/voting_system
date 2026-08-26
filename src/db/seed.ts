@@ -7,7 +7,6 @@
  * - Refuses to run when NODE_ENV=production. Demo seeding must be impossible
  *   in production; there is no override flag.
  */
-import { pathToFileURL } from "node:url";
 import { loadEnvFile, requireDatabaseUrl } from "@/db/env";
 
 async function main() {

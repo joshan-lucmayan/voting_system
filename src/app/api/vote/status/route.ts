@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
 import { electionVoters, elections } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
+import { isOpenForVoting } from "@/lib/elections";
 
 export const dynamic = "force-dynamic";
 
@@ -50,11 +51,7 @@ export async function GET(request: NextRequest) {
 
     const hasVoted = !!voterRecord?.votedAt;
     const isEligible = voterRecord?.eligible ?? false;
-    const now = new Date();
-    const isOpen =
-      election.state === "open" &&
-      now >= election.startsAt &&
-      now <= election.endsAt;
+    const isOpen = isOpenForVoting(election);
     const showResults = election.showLiveResults;
 
     return Response.json({

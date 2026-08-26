@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   ballotSelections,
@@ -58,56 +58,67 @@ export async function GET(
         ? Math.round((totalVotes / totalEligible) * 1000) / 10
         : 0;
 
-    // Per-position and per-candidate stats
+    // Fetch all positions for this election
     const positions = await db
       .select()
       .from(electionPositions)
       .where(eq(electionPositions.electionId, electionId));
 
-    const positionStats = [];
+    const positionIds = positions.map((p) => p.id);
 
-    for (const position of positions) {
-      const posCandidates = await db
-        .select({
-          id: candidates.id,
-          name: candidates.name,
-          grade: candidates.grade,
-          imageUrl: candidates.imageUrl,
-        })
-        .from(candidates)
-        .where(eq(candidates.positionId, position.id));
+    // Fetch all candidates for these positions in one query
+    const allCandidates =
+      positionIds.length > 0
+        ? await db
+            .select({
+              id: candidates.id,
+              name: candidates.name,
+              grade: candidates.grade,
+              imageUrl: candidates.imageUrl,
+              positionId: candidates.positionId,
+            })
+            .from(candidates)
+            .where(inArray(candidates.positionId, positionIds))
+        : [];
 
-      const candidateStats = [];
+    // Batch vote counts: aggregate all votes by candidate in one query
+    const voteCounts =
+      positionIds.length > 0
+        ? await db
+            .select({
+              candidateId: ballotSelections.candidateId,
+              voteCount: sql<number>`count(*)::int`,
+            })
+            .from(ballotSelections)
+            .innerJoin(ballots, eq(ballotSelections.ballotId, ballots.id))
+            .where(eq(ballots.electionId, electionId))
+            .groupBy(ballotSelections.candidateId)
+        : [];
 
-      for (const candidate of posCandidates) {
-        const [voteCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(ballotSelections)
-          .innerJoin(ballots, eq(ballotSelections.ballotId, ballots.id))
-          .where(
-            and(
-              eq(ballots.electionId, electionId),
-              eq(ballotSelections.candidateId, candidate.id),
-            ),
-          );
+    const votesByCandidate = new Map<string, number>();
+    for (const row of voteCounts) {
+      votesByCandidate.set(row.candidateId, row.voteCount);
+    }
 
-        candidateStats.push({
-          ...candidate,
-          votes: voteCount?.count ?? 0,
-        });
-      }
+    // Build per-position stats
+    const positionStats = positions.map((position) => {
+      const candidateStats = allCandidates
+        .filter((c) => c.positionId === position.id)
+        .map((c) => ({
+          ...c,
+          votes: votesByCandidate.get(c.id) ?? 0,
+        }))
+        .sort((a, b) => b.votes - a.votes);
 
-      candidateStats.sort((a, b) => b.votes - a.votes);
-
-      positionStats.push({
+      return {
         position: {
           id: position.id,
           name: position.name,
           description: position.description,
         },
         candidates: candidateStats,
-      });
-    }
+      };
+    });
 
     return Response.json({
       election: {

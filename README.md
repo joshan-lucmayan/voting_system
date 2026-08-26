@@ -64,7 +64,7 @@ The School Council Voting System provides a complete platform for running studen
 
 | Layer | Technology |
 |-------|-----------|
-| Framework | Next.js 15 (App Router, Turbopack) |
+| Framework | Next.js 15 (App Router) |
 | Language | TypeScript 5.8 |
 | Database | PostgreSQL 14+ |
 | ORM | Drizzle ORM 0.39 |
@@ -78,7 +78,7 @@ The School Council Voting System provides a complete platform for running studen
 ## Project Structure
 
 ```
-voting_system/
+school-council-voting/
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx                # Root layout (html, body, fonts)
@@ -105,25 +105,35 @@ voting_system/
 │   │           ├── candidates/route.ts       # GET/POST: List and add candidates
 │   │           ├── candidates/[id]/route.ts  # PATCH/DELETE: Update or remove candidate
 │   │           ├── stats/[electionId]/route.ts  # GET: Vote statistics
-│   │           └── positions/route.ts        # GET/POST/DELETE: Position management
+│   │           ├── positions/route.ts        # GET/POST/DELETE: Position management
+│   │           └── voters/route.ts           # GET/POST/DELETE: Voter eligibility management
+│   ├── components/
+│   │   ├── admin/AdminDashboard.tsx  # Admin dashboard with tabbed interface
+│   │   └── vote/VoteArea.tsx         # Student voting interface (ballot, review, confirmation, results)
 │   ├── db/
 │   │   ├── schema.ts                 # Drizzle schema (11 tables)
-│   │   └── index.ts                  # Lazy database connection (proxy-based)
+│   │   ├── index.ts                  # Lazy database connection (proxy-based)
+│   │   ├── env.ts                    # Environment variable loader for CLI scripts
+│   │   ├── seed.ts                   # CLI seeder script
+│   │   └── seed-data.ts             # Demo dataset for development
 │   ├── lib/
 │   │   ├── auth.ts                   # Session creation, validation, destruction
+│   │   ├── elections.ts              # Election state machine, transition logic, resolution
+│   │   ├── election-ids.ts           # Fixed UUIDs for demo data
 │   │   ├── password.ts               # bcrypt hash and verify
-│   │   ├── validators.ts             # Input validation helpers
-│   │   ├── election-data.ts          # Demo data seeder (runs on first request)
-│   │   └── election-ids.ts           # Fixed UUIDs for demo data
+│   │   ├── rate-limit.ts            # Sliding-window rate limiter and progressive failure delay
+│   │   └── validators.ts             # Input validation helpers
+│   ├── instrumentation.ts            # Session cleanup on server start
 │   └── middleware.ts                  # Route protection (student/admin)
 ├── public/
 │   └── candidates/                   # Candidate images (SVG placeholders)
-├── drizzle.config.json               # Drizzle Kit configuration
+├── tests/
+│   ├── integration/                  # Integration tests (vitest)
+│   └── setup/                        # Test setup (global database setup)
+├── drizzle/                          # Drizzle Kit migration files and metadata
 ├── package.json
 ├── tsconfig.json
-├── next.config.ts
-├── postcss.config.mjs
-├── .env.example
+├── vitest.config.ts                  # Vitest configuration
 └── README.md
 ```
 
@@ -175,19 +185,25 @@ psql -U postgres -c "CREATE DATABASE voting_db;"
 npx drizzle-kit push
 ```
 
-### 5. Start the dev server
+### 5. Seed demo data (optional)
+
+```bash
+npm run db:seed
+```
+
+### 6. Start the dev server
 
 ```bash
 npm run dev
 ```
 
-### 6. Open the app
+### 7. Open the app
 
 - **Homepage**: http://localhost:3000
 - **Student login**: School ID `STU-2026-1842`, Password `student123`
 - **Admin login**: School ID `ADM-001`, Password `admin123`
 
-> Demo data (election, positions, candidates) is seeded automatically on the first API request.
+> Demo data is seeded automatically via `db:seed`. The seeder is idempotent and safe to re-run.
 
 ---
 
@@ -530,6 +546,9 @@ npm run build
 
 # Start the production server
 npm start
+
+# Run integration tests (requires a running server)
+npm run build && vitest run
 ```
 
 ### Recommended Platforms
@@ -559,6 +578,13 @@ CMD ["node", "server.js"]
 ```
 
 > **Note**: For standalone output, add `output: "standalone"` to `next.config.ts`.
+
+### Testing
+
+```bash
+# Run integration tests (requires a running PostgreSQL and production build)
+npm run build && vitest run
+```
 
 ### Production Checklist
 
@@ -642,6 +668,9 @@ npx drizzle-kit migrate
 
 # Open Drizzle Studio (visual database browser)
 npx drizzle-kit studio
+
+# Seed demo data (idempotent, dev only)
+npm run db:seed
 ```
 
 ---

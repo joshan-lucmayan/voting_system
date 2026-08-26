@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   ballotSelections,
@@ -45,67 +45,74 @@ export async function GET(
       );
     }
 
+    // Fetch positions for this election
     const positions = await db
       .select()
       .from(electionPositions)
       .where(eq(electionPositions.electionId, electionId));
 
-    const results = [];
+    // Fetch all candidates for this election in one query
+    const positionIds = positions.map((p) => p.id);
+    const allCandidates =
+      positionIds.length > 0
+        ? await db
+            .select({
+              id: candidates.id,
+              name: candidates.name,
+              grade: candidates.grade,
+              imageUrl: candidates.imageUrl,
+              positionId: candidates.positionId,
+            })
+            .from(candidates)
+            .where(inArray(candidates.positionId, positionIds))
+        : [];
 
-    for (const position of positions) {
-      // Count votes for each candidate in this position
-      const votes = await db
-        .select({
-          candidateId: ballotSelections.candidateId,
-          voteCount: sql<number>`count(*)::int`,
-        })
-        .from(ballotSelections)
-        .innerJoin(ballots, eq(ballotSelections.ballotId, ballots.id))
-        .where(
-          and(
-            eq(ballots.electionId, electionId),
-            eq(ballotSelections.positionId, position.id),
-          ),
-        )
-        .groupBy(ballotSelections.candidateId);
+    // Batch vote counts: aggregate all votes grouped by candidate in one query
+    const voteCounts =
+      positions.length > 0
+        ? await db
+            .select({
+              candidateId: ballotSelections.candidateId,
+              positionId: ballotSelections.positionId,
+              voteCount: sql<number>`count(*)::int`,
+            })
+            .from(ballotSelections)
+            .innerJoin(ballots, eq(ballotSelections.ballotId, ballots.id))
+            .where(eq(ballots.electionId, electionId))
+            .groupBy(
+              ballotSelections.candidateId,
+              ballotSelections.positionId,
+            )
+        : [];
 
-      // Get candidate details
-      const candidateIds = votes.map((v) => v.candidateId);
-      const candidateList =
-        candidateIds.length > 0
-          ? await db
-              .select({
-                id: candidates.id,
-                name: candidates.name,
-                grade: candidates.grade,
-                imageUrl: candidates.imageUrl,
-              })
-              .from(candidates)
-              .where(
-                eq(candidates.positionId, position.id),
-              )
-          : [];
+    // Build a lookup for vote counts
+    const votesByCandidate = new Map<string, number>();
+    for (const row of voteCounts) {
+      votesByCandidate.set(row.candidateId, row.voteCount);
+    }
 
-      const candidateResults = candidateList.map((c) => ({
-        id: c.id,
-        name: c.name,
-        grade: c.grade,
-        imageUrl: c.imageUrl,
-        votes: votes.find((v) => v.candidateId === c.id)?.voteCount ?? 0,
-      }));
+    // Group candidates by position and build results
+    const results = positions.map((position) => {
+      const positionCandidates = allCandidates
+        .filter((c) => c.positionId === position.id)
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          grade: c.grade,
+          imageUrl: c.imageUrl,
+          votes: votesByCandidate.get(c.id) ?? 0,
+        }))
+        .sort((a, b) => b.votes - a.votes);
 
-      // Sort by votes descending
-      candidateResults.sort((a, b) => b.votes - a.votes);
-
-      results.push({
+      return {
         position: {
           id: position.id,
           name: position.name,
           description: position.description,
         },
-        candidates: candidateResults,
-      });
-    }
+        candidates: positionCandidates,
+      };
+    });
 
     // Get total ballot count
     const [totalRow] = await db
